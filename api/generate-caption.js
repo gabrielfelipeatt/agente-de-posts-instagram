@@ -36,6 +36,59 @@ Link: ${article.url}
 `.trim()
 }
 
+function getGeminiApiKey() {
+  return (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    ''
+  )
+}
+
+async function getRequestBody(request) {
+  if (request.body && typeof request.body === 'object') {
+    return request.body
+  }
+
+  if (typeof request.body === 'string' && request.body.trim()) {
+    return JSON.parse(request.body)
+  }
+
+  const chunks = []
+
+  for await (const chunk of request) {
+    chunks.push(chunk)
+  }
+
+  if (chunks.length === 0) {
+    return {}
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
+function normalizeGeminiError(statusCode, data) {
+  const apiMessage = data?.error?.message
+
+  if (statusCode === 400 && typeof apiMessage === 'string') {
+    if (apiMessage.includes('API key not valid')) {
+      return 'A chave da Gemini foi rejeitada. Gere uma nova chave no Google AI Studio e atualize GEMINI_API_KEY.'
+    }
+
+    return apiMessage
+  }
+
+  if (statusCode === 403) {
+    return 'A Gemini bloqueou a requisicao. Verifique se a API Generative Language esta habilitada para essa chave.'
+  }
+
+  if (statusCode === 429) {
+    return 'Limite de requisicoes da Gemini atingido. Aguarde um pouco e tente novamente.'
+  }
+
+  return apiMessage || 'Falha ao consultar o Gemini.'
+}
+
 async function generateWithGemini(prompt, apiKey) {
   const response = await fetch(
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
@@ -64,7 +117,7 @@ async function generateWithGemini(prompt, apiKey) {
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error(data?.error?.message || 'Falha ao consultar o Gemini.')
+    throw new Error(normalizeGeminiError(response.status, data))
   }
 
   const caption =
@@ -85,23 +138,25 @@ export default async function handler(request, response) {
     return sendJson(response, 405, { error: 'Metodo nao permitido.' })
   }
 
-  const geminiApiKey = process.env.GEMINI_API_KEY
+  const geminiApiKey = getGeminiApiKey()
 
   if (!geminiApiKey) {
     return sendJson(response, 500, {
-      error: 'Defina GEMINI_API_KEY nas variaveis da Vercel.',
-    })
-  }
-
-  const article = request.body?.article
-
-  if (!article?.title || !article?.url) {
-    return sendJson(response, 400, {
-      error: 'Envie uma noticia valida para gerar a legenda.',
+      error:
+        'Defina GEMINI_API_KEY, GOOGLE_API_KEY ou GOOGLE_GENERATIVE_AI_API_KEY nas variaveis de ambiente.',
     })
   }
 
   try {
+    const body = await getRequestBody(request)
+    const article = body?.article
+
+    if (!article?.title || !article?.url) {
+      return sendJson(response, 400, {
+        error: 'Envie uma noticia valida para gerar a legenda.',
+      })
+    }
+
     const caption = await generateWithGemini(buildPrompt(article), geminiApiKey)
     return sendJson(response, 200, { caption })
   } catch (error) {
