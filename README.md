@@ -33,6 +33,9 @@ npm install
 npm run dev
 ```
 
+Observacao:
+`npm run dev` sobe apenas o frontend do Vite. As rotas `/api/news` e `/api/generate-caption` nao existem nesse modo e o navegador pode mostrar erros como `Unexpected token '<'`.
+
 Para testar as rotas `/api/*` junto com o frontend localmente, use a CLI da Vercel:
 
 ```bash

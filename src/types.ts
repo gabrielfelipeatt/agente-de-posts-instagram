@@ -12,7 +12,7 @@ export interface Article {
   description: string
   content: string
   source: string
-  provider: 'GNews' | 'NewsAPI'
+  provider: 'Google Noticias' | 'GNews' | 'NewsAPI'
   url: string
   imageUrl: string
   publishedAt: string

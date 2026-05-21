@@ -3,14 +3,14 @@ const CATEGORY_CONFIG = {
     topic: 'Fofoca',
     angle: 'Procure casal, exposed, separacao e frase que puxe curiosidade.',
     query:
-      '(famosos OR celebridades OR fofoca OR namoro OR separacao OR traição OR traicao)',
+      '(famosos OR celebridades OR fofoca OR namoro OR separacao OR traicao OR termino)',
     newsApiCategory: 'entertainment',
   },
   polemica: {
     topic: 'Polemica',
     angle: 'Priorize treta, pronunciamento, climao e alguem se defendendo.',
     query:
-      '(polêmica OR polemica OR treta OR discussão OR discussao OR exposed OR pronunciamento)',
+      '(polemica OR treta OR discussao OR exposed OR pronunciamento OR barraco)',
     newsApiCategory: 'entertainment',
   },
   futebol: {
@@ -31,7 +31,7 @@ const CATEGORY_CONFIG = {
     topic: 'TV & Musica',
     angle: 'Puxe reality, novela, artista, hit, show, turne ou participacao surpresa.',
     query:
-      '(tv OR música OR musica OR novela OR cantor OR cantora OR reality show OR serie)',
+      '(tv OR musica OR novela OR cantor OR cantora OR reality show OR serie)',
     newsApiCategory: 'entertainment',
   },
   bastidores: {
@@ -49,6 +49,20 @@ function sendJson(response, statusCode, body) {
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function decodeHtmlEntities(value) {
+  return normalizeText(value)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+function stripHtml(value) {
+  return decodeHtmlEntities(value).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function sanitizeArticle(article, provider, topic, angle) {
@@ -74,6 +88,34 @@ function sanitizeArticle(article, provider, topic, angle) {
   }
 }
 
+function extractXmlTag(block, tagName) {
+  const match = block.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)</${tagName}>`, 'i'))
+  return match ? match[1] : ''
+}
+
+function parseGoogleNewsRss(xml) {
+  const items = Array.from(xml.matchAll(/<item>([\s\S]*?)<\/item>/gi))
+
+  return items.map((match) => {
+    const block = match[1]
+    const title = stripHtml(extractXmlTag(block, 'title'))
+    const url = decodeHtmlEntities(extractXmlTag(block, 'link'))
+    const descriptionHtml = extractXmlTag(block, 'description')
+    const source = stripHtml(extractXmlTag(block, 'source')) || 'Google Noticias'
+    const publishedAt = normalizeText(extractXmlTag(block, 'pubDate'))
+    const description = stripHtml(descriptionHtml)
+
+    return {
+      title,
+      url,
+      description,
+      content: description,
+      publishedAt,
+      source,
+    }
+  })
+}
+
 async function readJson(response, fallbackError) {
   if (!response.ok) {
     const errorText = await response.text()
@@ -81,6 +123,28 @@ async function readJson(response, fallbackError) {
   }
 
   return response.json()
+}
+
+async function fetchGoogleNews(query) {
+  const url = new URL('https://news.google.com/rss/search')
+  url.searchParams.set('q', query)
+  url.searchParams.set('hl', 'pt-BR')
+  url.searchParams.set('gl', 'BR')
+  url.searchParams.set('ceid', 'BR:pt-419')
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/rss+xml, application/xml, text/xml;q=0.9',
+    },
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || 'Falha ao consultar o Google Noticias.')
+  }
+
+  const xml = await response.text()
+  return parseGoogleNewsRss(xml)
 }
 
 async function fetchGNews(query, apiKey) {
@@ -161,7 +225,8 @@ export default async function handler(request, response) {
   }
 
   try {
-    const [gnewsResult, newsApiResult] = await Promise.allSettled([
+    const [googleNewsResult, gnewsResult, newsApiResult] = await Promise.allSettled([
+      fetchGoogleNews(config.query),
       gnewsApiKey
         ? fetchGNews(config.query, gnewsApiKey)
         : Promise.reject(new Error('GNEWS_API_KEY nao configurada.')),
@@ -170,13 +235,24 @@ export default async function handler(request, response) {
         : Promise.reject(new Error('NEWS_API_KEY nao configurada.')),
     ])
 
-    const gnewsArticles =
-      gnewsResult.status === 'fulfilled' ? gnewsResult.value : []
+    const googleNewsArticles =
+      googleNewsResult.status === 'fulfilled' ? googleNewsResult.value : []
+    const gnewsArticles = gnewsResult.status === 'fulfilled' ? gnewsResult.value : []
     const newsApiArticles =
       newsApiResult.status === 'fulfilled' ? newsApiResult.value : []
 
-    if (gnewsArticles.length === 0 && newsApiArticles.length === 0) {
+    if (
+      googleNewsArticles.length === 0 &&
+      gnewsArticles.length === 0 &&
+      newsApiArticles.length === 0
+    ) {
       const failures = []
+
+      if (googleNewsResult.status === 'rejected') {
+        failures.push(
+          `Google Noticias: ${getErrorMessage(googleNewsResult.reason, 'falha desconhecida')}`,
+        )
+      }
 
       if (gnewsResult.status === 'rejected') {
         failures.push(`GNews: ${getErrorMessage(gnewsResult.reason, 'falha desconhecida')}`)
@@ -197,19 +273,21 @@ export default async function handler(request, response) {
     }
 
     const merged = [
+      ...googleNewsArticles.map((article) =>
+        sanitizeArticle(article, 'Google Noticias', config.topic, config.angle),
+      ),
       ...gnewsArticles.map((article) =>
         sanitizeArticle(article, 'GNews', config.topic, config.angle),
       ),
       ...newsApiArticles.map((article) =>
         sanitizeArticle(article, 'NewsAPI', config.topic, config.angle),
       ),
-    ]
-      .filter(Boolean)
+    ].filter(Boolean)
 
     const deduped = Array.from(
       new Map(
         merged.map((article) => [
-          `${article.url.toLowerCase()}::${article.title.toLowerCase()}`,
+          `${article.provider}::${article.url.toLowerCase()}::${article.title.toLowerCase()}`,
           article,
         ]),
       ).values(),
@@ -218,9 +296,15 @@ export default async function handler(request, response) {
         (left, right) =>
           new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime(),
       )
-      .slice(0, 18)
+      .slice(0, 30)
 
     const warnings = []
+
+    if (googleNewsResult.status === 'rejected') {
+      warnings.push(
+        `Google Noticias indisponivel: ${getErrorMessage(googleNewsResult.reason, 'erro desconhecido')}`,
+      )
+    }
 
     if (gnewsResult.status === 'rejected') {
       warnings.push(`GNews indisponivel: ${getErrorMessage(gnewsResult.reason, 'erro desconhecido')}`)

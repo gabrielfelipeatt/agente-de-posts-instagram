@@ -39,8 +39,48 @@ const CATEGORIES: Array<{
   },
 ]
 
+const PROVIDER_SECTIONS: Array<{
+  id: Article['provider']
+  label: string
+  subtitle: string
+}> = [
+  {
+    id: 'Google Noticias',
+    label: 'Google Noticias',
+    subtitle: 'Leitura ampla de tendencias via feed do Google.',
+  },
+  {
+    id: 'GNews',
+    label: 'GNews API',
+    subtitle: 'Busca estruturada para achar pauta quente rapido.',
+  },
+  {
+    id: 'NewsAPI',
+    label: 'NewsAPI',
+    subtitle: 'Headlines e everything separados por fonte.',
+  },
+]
+
 const EMPTY_MESSAGE =
   'Escolha uma categoria para puxar as noticias mais quentes e gerar legendas em segundos.'
+
+async function readApiJson<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get('content-type') ?? ''
+
+  if (!contentType.includes('application/json')) {
+    const text = await response.text()
+
+    if (text.toLowerCase().includes('<!doctype') || text.toLowerCase().includes('<html')) {
+      throw new Error(
+        'A rota /api respondeu HTML em vez de JSON. Rode o projeto com `npm run dev:vercel` para subir o frontend junto com as funcoes da Vercel.',
+      )
+    }
+
+    throw new Error('A rota /api respondeu em um formato inesperado.')
+  }
+
+  return response.json() as Promise<T>
+}
 
 function App() {
   const [category, setCategory] = useState<NewsCategory>('fofoca')
@@ -53,6 +93,7 @@ function App() {
   const [error, setError] = useState('')
   const [copyFeedback, setCopyFeedback] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  const [warnings, setWarnings] = useState<string[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -64,10 +105,11 @@ function App() {
 
       try {
         const response = await fetch(`/api/news?category=${category}`)
-        const payload = (await response.json()) as {
+        const payload = await readApiJson<{
           articles?: Article[]
+          warnings?: string[]
           error?: string
-        }
+        }>(response)
 
         if (!response.ok) {
           throw new Error(payload.error ?? 'Nao foi possivel carregar as noticias.')
@@ -82,6 +124,7 @@ function App() {
         startTransition(() => {
           setArticles(nextArticles)
           setSelectedId(nextArticles[0]?.id ?? '')
+          setWarnings(payload.warnings ?? [])
         })
       } catch (requestError) {
         if (cancelled) {
@@ -90,6 +133,7 @@ function App() {
 
         setArticles([])
         setSelectedId('')
+        setWarnings([])
         setError(
           requestError instanceof Error
             ? requestError.message
@@ -117,12 +161,21 @@ function App() {
     }
 
     return articles.filter((article) =>
-      [article.title, article.description, article.source, article.topic]
+      [article.title, article.description, article.source, article.topic, article.provider]
         .join(' ')
         .toLowerCase()
         .includes(normalizedSearch),
     )
   }, [articles, search])
+
+  const groupedArticles = useMemo(
+    () =>
+      PROVIDER_SECTIONS.map((section) => ({
+        ...section,
+        articles: filteredArticles.filter((article) => article.provider === section.id),
+      })),
+    [filteredArticles],
+  )
 
   const selectedArticle =
     filteredArticles.find((article) => article.id === selectedId) ??
@@ -149,10 +202,10 @@ function App() {
         }),
       })
 
-      const payload = (await response.json()) as {
+      const payload = await readApiJson<{
         caption?: string
         error?: string
-      }
+      }>(response)
 
       if (!response.ok) {
         throw new Error(payload.error ?? 'Nao foi possivel gerar a legenda.')
@@ -191,28 +244,27 @@ function App() {
           <span className="eyebrow">Studio de posts virais</span>
           <h1>Radar Pop</h1>
           <p className="hero-text">
-            Busque noticias quentes em fofoca, polemica, futebol, influencers,
-            TV & musica e bastidores. Escolha uma pauta e gere uma legenda
-            pronta para Instagram no estilo de perfis que vivem de viral.
+            Agora voce navega pelas categorias no topo e compara as pautas por
+            fonte lado a lado: Google Noticias, GNews e NewsAPI.
           </p>
         </div>
 
         <div className="hero-card">
           <p className="hero-kicker">Fluxo</p>
           <ol>
-            <li>Seleciona o nicho que voce quer atacar hoje.</li>
-            <li>Escolhe a noticia mais forte entre GNews e NewsAPI.</li>
-            <li>Gera uma legenda com CTA fixa para publicar rapido.</li>
+            <li>Troque a categoria no menu superior.</li>
+            <li>Compare as manchetes fonte por fonte nas tres colunas.</li>
+            <li>Escolha a melhor pauta e gere a legenda pronta para postar.</li>
           </ol>
         </div>
       </section>
 
       <section className="workspace">
-        <aside className="sidebar">
+        <div className="top-bar">
           <div className="panel-heading">
             <div>
               <span className="section-tag">Categorias</span>
-              <h2>Fontes quentes</h2>
+              <h2>Escolha o territorio da pauta</h2>
             </div>
             <button
               type="button"
@@ -223,7 +275,7 @@ function App() {
             </button>
           </div>
 
-          <div className="category-grid">
+          <div className="category-menu">
             {CATEGORIES.map((item) => (
               <button
                 key={item.id}
@@ -232,7 +284,7 @@ function App() {
                 onClick={() => setCategory(item.id)}
               >
                 <strong>{item.label}</strong>
-                <span>{item.description}</span>
+                <small>{item.description}</small>
               </button>
             ))}
           </div>
@@ -247,47 +299,66 @@ function App() {
             />
           </label>
 
-          <div className="news-panel">
-            <div className="panel-heading compact">
-              <div>
-                <span className="section-tag">Noticias</span>
-                <h2>{loadingNews ? 'Buscando...' : `${filteredArticles.length} pautas`}</h2>
-              </div>
-            </div>
+          {error ? <p className="feedback error">{error}</p> : null}
 
-            {error ? <p className="feedback error">{error}</p> : null}
-
-            {!loadingNews && filteredArticles.length === 0 ? (
-              <p className="feedback">{EMPTY_MESSAGE}</p>
-            ) : null}
-
-            <div className="article-list">
-              {filteredArticles.map((article) => (
-                <button
-                  key={article.id}
-                  type="button"
-                  className={
-                    article.id === selectedArticle?.id
-                      ? 'article-card active'
-                      : 'article-card'
-                  }
-                  onClick={() => {
-                    setSelectedId(article.id)
-                    setCaption('')
-                    setCopyFeedback('')
-                  }}
-                >
-                  <span className="source-line">
-                    <span>{article.source}</span>
-                    <span>{article.provider}</span>
-                  </span>
-                  <strong>{article.title}</strong>
-                  <p>{article.description || 'Sem descricao resumida na fonte.'}</p>
-                </button>
+          {warnings.length > 0 ? (
+            <div className="warnings-panel">
+              {warnings.map((warning) => (
+                <p key={warning} className="feedback">
+                  {warning}
+                </p>
               ))}
             </div>
+          ) : null}
+
+          <div className="news-columns">
+            {groupedArticles.map((section) => (
+              <div key={section.id} className="news-panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <span className="section-tag">Noticias</span>
+                    <h2>{section.label}</h2>
+                    <p className="column-subtitle">{section.subtitle}</p>
+                  </div>
+                </div>
+
+                {!loadingNews && section.articles.length === 0 ? (
+                  <p className="feedback">Nenhuma pauta dessa fonte no filtro atual.</p>
+                ) : null}
+
+                <div className="article-list">
+                  {section.articles.map((article) => (
+                    <button
+                      key={article.id}
+                      type="button"
+                      className={
+                        article.id === selectedArticle?.id
+                          ? 'article-card active'
+                          : 'article-card'
+                      }
+                      onClick={() => {
+                        setSelectedId(article.id)
+                        setCaption('')
+                        setCopyFeedback('')
+                      }}
+                    >
+                      <span className="source-line">
+                        <span>{article.source}</span>
+                        <span>{new Date(article.publishedAt).toLocaleDateString('pt-BR')}</span>
+                      </span>
+                      <strong>{article.title}</strong>
+                      <p>{article.description || 'Sem descricao resumida na fonte.'}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
-        </aside>
+
+          {!loadingNews && filteredArticles.length === 0 ? (
+            <p className="feedback">{EMPTY_MESSAGE}</p>
+          ) : null}
+        </div>
 
         <section className="content">
           <div className="preview-panel">
@@ -335,7 +406,7 @@ function App() {
                 <div className="caption-panel">
                   <div className="panel-heading">
                     <div>
-                      <span className="section-tag">Legenda com Gemini</span>
+                      <span className="section-tag">Legenda com IA</span>
                       <h2>Texto pronto para Instagram</h2>
                     </div>
                     <div className="action-row">
@@ -361,7 +432,7 @@ function App() {
                   <textarea
                     value={caption}
                     onChange={(event) => setCaption(event.target.value)}
-                    placeholder="A legenda gerada pela Gemini vai aparecer aqui."
+                    placeholder="A legenda gerada pela IA vai aparecer aqui."
                   />
 
                   {copyFeedback ? <p className="feedback success">{copyFeedback}</p> : null}
