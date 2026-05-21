@@ -11,7 +11,7 @@ App em React + Vercel para buscar noticias quentes em:
 - TV & musica
 - bastidores
 
-O painel agrega resultados do `gnews.io` e do `newsapi.org` e usa a Gemini API para gerar uma legenda no estilo de pagina viral de Instagram.
+O painel agrega resultados do `gnews.io` e do `newsapi.org` e usa a Gemini API para gerar uma legenda no estilo de pagina viral de Instagram. Quando a Gemini responde com limite de requisicoes (`429`), a rota tenta automaticamente a Groq como fallback.
 
 ## Variaveis de ambiente
 
@@ -21,6 +21,7 @@ Configure estas chaves na Vercel:
 GNEWS_API_KEY=
 NEWS_API_KEY=
 GEMINI_API_KEY=
+GROQ_API_KEY=
 ```
 
 ## Rodar localmente

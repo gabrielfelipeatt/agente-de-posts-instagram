@@ -1,5 +1,15 @@
 const CTA =
-  '👉 Para não perder nada do mundo dos famosos, siga a nossa página agora mesmo! @kayle.kloss🔔'
+  'Para nao perder nada do mundo dos famosos, siga a nossa pagina agora mesmo! @kayle.kloss'
+
+class ProviderError extends Error {
+  constructor(message, options = {}) {
+    super(message)
+    this.name = 'ProviderError'
+    this.provider = options.provider || 'unknown'
+    this.statusCode = options.statusCode || 500
+    this.retryable = options.retryable || false
+  }
+}
 
 function sendJson(response, statusCode, body) {
   response.status(statusCode).json(body)
@@ -20,7 +30,7 @@ Diretrizes obrigatorias:
 - Use algumas palavras em MAIUSCULAS no meio do texto para reforco.
 - Termine com uma pergunta instigante para gerar comentarios.
 - No final, inclua exatamente esta CTA em negrito:
-**${CTA}**
+**👉 ${CTA}🔔**
 - Inclua de 5 a 8 hashtags relevantes.
 - Nao use markdown extra alem do negrito da CTA.
 - Entregue apenas a legenda final.
@@ -45,6 +55,10 @@ function getGeminiApiKey() {
   )
 }
 
+function getGroqApiKey() {
+  return process.env.GROQ_API_KEY || ''
+}
+
 async function getRequestBody(request) {
   if (request.body && typeof request.body === 'object') {
     return request.body
@@ -67,26 +81,58 @@ async function getRequestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
+function readGeminiCaption(data) {
+  const caption =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || '')
+      .join('\n')
+      .trim() || ''
+
+  if (!caption) {
+    throw new ProviderError('O Gemini nao retornou uma legenda.', {
+      provider: 'gemini',
+      statusCode: 502,
+    })
+  }
+
+  return caption
+}
+
 function normalizeGeminiError(statusCode, data) {
   const apiMessage = data?.error?.message
 
   if (statusCode === 400 && typeof apiMessage === 'string') {
     if (apiMessage.includes('API key not valid')) {
-      return 'A chave da Gemini foi rejeitada. Gere uma nova chave no Google AI Studio e atualize GEMINI_API_KEY.'
+      return new ProviderError(
+        'A chave da Gemini foi rejeitada. Gere uma nova chave no Google AI Studio e atualize GEMINI_API_KEY.',
+        { provider: 'gemini', statusCode },
+      )
     }
 
-    return apiMessage
+    return new ProviderError(apiMessage, {
+      provider: 'gemini',
+      statusCode,
+    })
   }
 
   if (statusCode === 403) {
-    return 'A Gemini bloqueou a requisicao. Verifique se a API Generative Language esta habilitada para essa chave.'
+    return new ProviderError(
+      'A Gemini bloqueou a requisicao. Verifique se a API Generative Language esta habilitada para essa chave.',
+      { provider: 'gemini', statusCode },
+    )
   }
 
   if (statusCode === 429) {
-    return 'Limite de requisicoes da Gemini atingido. Aguarde um pouco e tente novamente.'
+    return new ProviderError(
+      'Limite de requisicoes da Gemini atingido.',
+      { provider: 'gemini', statusCode, retryable: true },
+    )
   }
 
-  return apiMessage || 'Falha ao consultar o Gemini.'
+  return new ProviderError(apiMessage || 'Falha ao consultar o Gemini.', {
+    provider: 'gemini',
+    statusCode,
+  })
 }
 
 async function generateWithGemini(prompt, apiKey) {
@@ -117,34 +163,107 @@ async function generateWithGemini(prompt, apiKey) {
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error(normalizeGeminiError(response.status, data))
+    throw normalizeGeminiError(response.status, data)
   }
 
-  const caption =
-    data?.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text || '')
-      .join('\n')
-      .trim() || ''
+  return readGeminiCaption(data)
+}
+
+function normalizeGroqError(statusCode, data) {
+  const apiMessage = data?.error?.message
+
+  if (statusCode === 401) {
+    return new ProviderError(
+      'A chave da Groq foi rejeitada. Atualize GROQ_API_KEY.',
+      { provider: 'groq', statusCode },
+    )
+  }
+
+  if (statusCode === 429) {
+    return new ProviderError(
+      'Limite de requisicoes da Groq atingido.',
+      { provider: 'groq', statusCode, retryable: true },
+    )
+  }
+
+  return new ProviderError(apiMessage || 'Falha ao consultar a Groq.', {
+    provider: 'groq',
+    statusCode,
+  })
+}
+
+async function generateWithGroq(prompt, apiKey) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.95,
+      max_tokens: 700,
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    }),
+  })
+
+  const data = await response.json()
+
+  if (!response.ok) {
+    throw normalizeGroqError(response.status, data)
+  }
+
+  const caption = data?.choices?.[0]?.message?.content?.trim() || ''
 
   if (!caption) {
-    throw new Error('O Gemini nao retornou uma legenda.')
+    throw new ProviderError('A Groq nao retornou uma legenda.', {
+      provider: 'groq',
+      statusCode: 502,
+    })
   }
 
   return caption
 }
 
+async function generateCaptionWithFallback(prompt) {
+  const geminiApiKey = getGeminiApiKey()
+  const groqApiKey = getGroqApiKey()
+
+  if (!geminiApiKey && !groqApiKey) {
+    throw new ProviderError(
+      'Defina GEMINI_API_KEY, GOOGLE_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY ou GROQ_API_KEY nas variaveis de ambiente.',
+      { statusCode: 500 },
+    )
+  }
+
+  if (!geminiApiKey && groqApiKey) {
+    return generateWithGroq(prompt, groqApiKey)
+  }
+
+  try {
+    return await generateWithGemini(prompt, geminiApiKey)
+  } catch (error) {
+    if (
+      error instanceof ProviderError &&
+      error.provider === 'gemini' &&
+      error.statusCode === 429 &&
+      groqApiKey
+    ) {
+      return generateWithGroq(prompt, groqApiKey)
+    }
+
+    throw error
+  }
+}
+
 export default async function handler(request, response) {
   if (request.method !== 'POST') {
     return sendJson(response, 405, { error: 'Metodo nao permitido.' })
-  }
-
-  const geminiApiKey = getGeminiApiKey()
-
-  if (!geminiApiKey) {
-    return sendJson(response, 500, {
-      error:
-        'Defina GEMINI_API_KEY, GOOGLE_API_KEY ou GOOGLE_GENERATIVE_AI_API_KEY nas variaveis de ambiente.',
-    })
   }
 
   try {
@@ -157,10 +276,10 @@ export default async function handler(request, response) {
       })
     }
 
-    const caption = await generateWithGemini(buildPrompt(article), geminiApiKey)
+    const caption = await generateCaptionWithFallback(buildPrompt(article))
     return sendJson(response, 200, { caption })
   } catch (error) {
-    return sendJson(response, 502, {
+    return sendJson(response, error?.statusCode || 502, {
       error:
         error instanceof Error
           ? error.message
