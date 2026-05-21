@@ -153,16 +153,21 @@ export default async function handler(request, response) {
   const gnewsApiKey = process.env.GNEWS_API_KEY
   const newsApiKey = process.env.NEWS_API_KEY
 
-  if (!gnewsApiKey || !newsApiKey) {
+  if (!gnewsApiKey && !newsApiKey) {
     return sendJson(response, 500, {
-      error: 'Defina GNEWS_API_KEY e NEWS_API_KEY nas variaveis da Vercel.',
+      error:
+        'Defina pelo menos uma chave entre GNEWS_API_KEY e NEWS_API_KEY nas variaveis de ambiente.',
     })
   }
 
   try {
     const [gnewsResult, newsApiResult] = await Promise.allSettled([
-      fetchGNews(config.query, gnewsApiKey),
-      fetchNewsApi(config.query, config.newsApiCategory, newsApiKey),
+      gnewsApiKey
+        ? fetchGNews(config.query, gnewsApiKey)
+        : Promise.reject(new Error('GNEWS_API_KEY nao configurada.')),
+      newsApiKey
+        ? fetchNewsApi(config.query, config.newsApiCategory, newsApiKey)
+        : Promise.reject(new Error('NEWS_API_KEY nao configurada.')),
     ])
 
     const gnewsArticles =
