@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg: #0f0906;
+  --bg-2: #180d08;
+  --panel: rgba(28, 17, 12, 0.82);
+  --border: rgba(255, 219, 184, 0.11);
+  --text-base: #fff7ef;
+  --text-muted: #d8c2b3;
+  --accent: #ffba49;
+  --accent-2: #ff7644;
+  --accent-soft: #ffd9a5;
+  --ink-strong: #34160a;
+  --ink-soft: #88573d;
+  --ink-body: #5e3420;
+  --shadow-soft: 0 20px 70px rgba(0, 0, 0, 0.22);
+  --shadow-strong: 0 18px 50px rgba(255, 118, 68, 0.12);
+  --display: 'Archivo Black', sans-serif;
+  --body: 'IBM Plex Sans', sans-serif;
+  color: var(--text-base);
+  background:
+    radial-gradient(circle at top, rgba(255, 118, 68, 0.16), transparent 30%),
+    radial-gradient(circle at right, rgba(255, 186, 73, 0.11), transparent 28%),
+    linear-gradient(180deg, var(--bg), var(--bg-2));
+  font-family: var(--body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h2,
+h3 {
+  color: var(--text-base);
+}
+
+#root {
+  min-height: 100vh;
+}
