@@ -1,5 +1,5 @@
 const CTA =
-  'Para nao perder nada do mundo dos famosos, siga a nossa pagina agora mesmo! @kayle.kloss'
+  'Para nao perder nada do mundo dos famosos, siga a nossa pagina agora mesmo! @fofokeiagora'
 
 class ProviderError extends Error {
   constructor(message, options = {}) {
